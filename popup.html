@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tab Organizer</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Tab Organizer</h1>
+      <p class="subtitle">Group tabs automatically by domain.</p>
+    </header>
+
+    <main>
+      <section class="add-rule">
+        <h2 id="form-title">Add a group</h2>
+        <form id="rule-form">
+          <input type="hidden" id="rule-id" />
+
+          <label for="group-name">Group name</label>
+          <input
+            type="text"
+            id="group-name"
+            placeholder="e.g. Social"
+            autocomplete="off"
+            required
+          />
+
+          <label for="group-color">Color</label>
+          <select id="group-color"></select>
+
+          <label for="group-domains">Domains</label>
+          <textarea
+            id="group-domains"
+            rows="3"
+            placeholder="facebook.com, instagram.com&#10;twitter.com"
+          ></textarea>
+          <small class="hint">
+            One or more domains, separated by commas or new lines. Subdomains are
+            matched automatically (facebook.com also matches m.facebook.com).
+          </small>
+
+          <div class="form-actions">
+            <button type="submit" id="save-btn" class="primary">Save group</button>
+            <button type="button" id="cancel-btn" class="secondary hidden">Cancel</button>
+          </div>
+          <p id="form-error" class="error hidden"></p>
+        </form>
+      </section>
+
+      <section class="rules">
+        <h2>Your groups</h2>
+        <ul id="rules-list"></ul>
+        <p id="empty-state" class="empty hidden">No groups yet. Add one above.</p>
+      </section>
+    </main>
+
+    <script src="common.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
