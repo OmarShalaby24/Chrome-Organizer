@@ -1,5 +1,6 @@
 // Popup logic: manage domain→group rules and trigger re-grouping.
 
+(() => {
 const {
   GROUP_COLORS,
   generateRuleId,
@@ -20,17 +21,73 @@ const els = {
   error: document.getElementById("form-error"),
   list: document.getElementById("rules-list"),
   empty: document.getElementById("empty-state"),
+  banner: document.getElementById("status-banner"),
+  organizeBtn: document.getElementById("organize-btn"),
+  organizeResult: document.getElementById("organize-result"),
+  colorDropdown: document.getElementById("color-dropdown"),
+  colorTrigger: document.getElementById("color-trigger"),
+  colorTriggerDot: document.getElementById("color-trigger-dot"),
+  colorTriggerLabel: document.getElementById("color-trigger-label"),
 };
 
 let rules = [];
+let selectedColor = GROUP_COLORS[0];
+
+function openColorMenu() {
+  els.color.classList.remove("hidden");
+  els.colorTrigger.setAttribute("aria-expanded", "true");
+}
+
+function closeColorMenu() {
+  els.color.classList.add("hidden");
+  els.colorTrigger.setAttribute("aria-expanded", "false");
+}
+
+function toggleColorMenu() {
+  if (els.color.classList.contains("hidden")) {
+    openColorMenu();
+  } else {
+    closeColorMenu();
+  }
+}
+
+function setColor(color) {
+  selectedColor = GROUP_COLORS.includes(color) ? color : GROUP_COLORS[0];
+  for (const swatch of els.color.querySelectorAll(".color-swatch")) {
+    const isSelected = swatch.dataset.color === selectedColor;
+    swatch.classList.toggle("selected", isSelected);
+    swatch.setAttribute("aria-checked", isSelected ? "true" : "false");
+  }
+  els.colorTriggerDot.className = "color-dot c-" + selectedColor;
+  els.colorTriggerLabel.textContent =
+    selectedColor.charAt(0).toUpperCase() + selectedColor.slice(1);
+}
 
 function populateColors() {
   for (const color of GROUP_COLORS) {
-    const opt = document.createElement("option");
-    opt.value = color;
-    opt.textContent = color.charAt(0).toUpperCase() + color.slice(1);
-    els.color.appendChild(opt);
+    const swatch = document.createElement("button");
+    swatch.type = "button";
+    swatch.className = "color-swatch c-" + color;
+    swatch.dataset.color = color;
+    swatch.setAttribute("role", "radio");
+    swatch.setAttribute("aria-checked", "false");
+    swatch.title = color.charAt(0).toUpperCase() + color.slice(1);
+    swatch.setAttribute("aria-label", swatch.title);
+    swatch.addEventListener("click", () => {
+      setColor(color);
+      closeColorMenu();
+    });
+    els.color.appendChild(swatch);
   }
+  setColor(selectedColor);
+
+  els.colorTrigger.addEventListener("click", toggleColorMenu);
+  document.addEventListener("click", (event) => {
+    if (!els.colorDropdown.contains(event.target)) closeColorMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeColorMenu();
+  });
 }
 
 function showError(msg) {
@@ -46,11 +103,12 @@ function clearError() {
 function resetForm() {
   els.ruleId.value = "";
   els.name.value = "";
-  els.color.value = GROUP_COLORS[0];
+  setColor(GROUP_COLORS[0]);
   els.domains.value = "";
   els.formTitle.textContent = "Add a group";
   els.saveBtn.textContent = "Save group";
   els.cancelBtn.classList.add("hidden");
+  closeColorMenu();
   clearError();
 }
 
@@ -111,7 +169,7 @@ function startEdit(id) {
   if (!rule) return;
   els.ruleId.value = rule.id;
   els.name.value = rule.groupName;
-  els.color.value = rule.color;
+  setColor(rule.color);
   els.domains.value = rule.domains.join(", ");
   els.formTitle.textContent = "Edit group";
   els.saveBtn.textContent = "Update group";
@@ -138,7 +196,7 @@ async function handleSubmit(event) {
   clearError();
 
   const groupName = els.name.value.trim();
-  const color = els.color.value;
+  const color = selectedColor;
   const domains = parseDomains(els.domains.value);
 
   if (!groupName) {
@@ -168,6 +226,65 @@ async function handleSubmit(event) {
   resetForm();
 }
 
+function sendMessage(message) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(message, (resp) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message });
+        } else {
+          resolve(resp || { ok: false });
+        }
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String(e) });
+    }
+  });
+}
+
+function showBanner(text) {
+  els.banner.textContent = text;
+  els.banner.classList.add("warn");
+  els.banner.classList.remove("hidden");
+}
+
+function showOrganizeResult(text, isWarn) {
+  els.organizeResult.textContent = text;
+  els.organizeResult.classList.toggle("warn", !!isWarn);
+  els.organizeResult.classList.remove("hidden");
+}
+
+async function checkStatus() {
+  const resp = await sendMessage({ type: "status" });
+  if (!resp.ok || resp.hasTabGroups === false) {
+    showBanner(
+      "Tab Groups don't appear to be available in this browser. Grouping may not work."
+    );
+  }
+}
+
+async function organizeNow() {
+  els.organizeBtn.disabled = true;
+  showOrganizeResult("Organizing…", false);
+  const resp = await sendMessage({ type: "regroupAll" });
+  els.organizeBtn.disabled = false;
+  if (!resp.ok) {
+    showOrganizeResult("Error: " + (resp.error || "could not reach background"), true);
+    return;
+  }
+  if (resp.hasTabGroups === false) {
+    showOrganizeResult("Tab Groups API unavailable in this browser.", true);
+    return;
+  }
+  const n = resp.matched || 0;
+  showOrganizeResult(
+    n === 0
+      ? "No open tabs matched your domains."
+      : "Organized " + n + " tab" + (n === 1 ? "" : "s") + ".",
+    n === 0
+  );
+}
+
 async function init() {
   populateColors();
   resetForm();
@@ -176,6 +293,10 @@ async function init() {
 
   els.form.addEventListener("submit", handleSubmit);
   els.cancelBtn.addEventListener("click", resetForm);
+  els.organizeBtn.addEventListener("click", organizeNow);
+
+  checkStatus();
 }
 
 init();
+})();

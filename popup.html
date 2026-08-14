@@ -13,6 +13,8 @@
     </header>
 
     <main>
+      <div id="status-banner" class="banner hidden"></div>
+
       <section class="add-rule">
         <h2 id="form-title">Add a group</h2>
         <form id="rule-form">
@@ -27,8 +29,27 @@
             required
           />
 
-          <label for="group-color">Color</label>
-          <select id="group-color"></select>
+          <label id="group-color-label">Color</label>
+          <div id="color-dropdown" class="color-dropdown">
+            <button
+              type="button"
+              id="color-trigger"
+              class="color-trigger"
+              aria-haspopup="true"
+              aria-expanded="false"
+              aria-labelledby="group-color-label"
+            >
+              <span id="color-trigger-dot" class="color-dot"></span>
+              <span id="color-trigger-label" class="color-trigger-label"></span>
+              <span class="color-trigger-caret" aria-hidden="true">▾</span>
+            </button>
+            <div
+              id="group-color"
+              class="color-grid hidden"
+              role="radiogroup"
+              aria-labelledby="group-color-label"
+            ></div>
+          </div>
 
           <label for="group-domains">Domains</label>
           <textarea
@@ -53,6 +74,10 @@
         <h2>Your groups</h2>
         <ul id="rules-list"></ul>
         <p id="empty-state" class="empty hidden">No groups yet. Add one above.</p>
+        <button type="button" id="organize-btn" class="secondary full-width">
+          Organize open tabs now
+        </button>
+        <p id="organize-result" class="result hidden"></p>
       </section>
     </main>
 
