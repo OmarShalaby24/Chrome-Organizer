@@ -7,6 +7,8 @@ const {
   parseDomains,
   loadRules,
   saveRules,
+  loadSettings,
+  saveSettings,
 } = self.TabOrganizer;
 
 const els = {
@@ -28,9 +30,11 @@ const els = {
   colorTrigger: document.getElementById("color-trigger"),
   colorTriggerDot: document.getElementById("color-trigger-dot"),
   colorTriggerLabel: document.getElementById("color-trigger-label"),
+  moveUnmatched: document.getElementById("move-unmatched"),
 };
 
 let rules = [];
+let settings = null;
 let selectedColor = GROUP_COLORS[0];
 
 function openColorMenu() {
@@ -285,15 +289,25 @@ async function organizeNow() {
   );
 }
 
+async function handleMoveUnmatchedChange() {
+  settings = { ...settings, moveUnmatchedToEnd: els.moveUnmatched.checked };
+  // The background worker picks this up through storage.onChanged.
+  await saveSettings(settings);
+}
+
 async function init() {
   populateColors();
   resetForm();
   rules = await loadRules();
   renderRules();
 
+  settings = await loadSettings();
+  els.moveUnmatched.checked = settings.moveUnmatchedToEnd;
+
   els.form.addEventListener("submit", handleSubmit);
   els.cancelBtn.addEventListener("click", resetForm);
   els.organizeBtn.addEventListener("click", organizeNow);
+  els.moveUnmatched.addEventListener("change", handleMoveUnmatchedChange);
 
   checkStatus();
 }

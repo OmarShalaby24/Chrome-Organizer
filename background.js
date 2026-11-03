@@ -4,8 +4,13 @@ importScripts("common.js");
 
 (() => {
 const {
+  SETTINGS_KEY,
+  DEFAULT_SETTINGS,
   findRuleForUrl,
+  getHostname,
   loadRules,
+  loadSettings,
+  normalizeSettings,
 } = self.TabOrganizer;
 
 const LOG = "[TabOrganizer]";
@@ -43,6 +48,25 @@ function ensureRulesLoaded() {
     rulesReady = refreshRules();
   }
   return rulesReady;
+}
+
+// Same pattern for the user's settings.
+let settingsCache = { ...DEFAULT_SETTINGS };
+let settingsReady = null;
+
+async function refreshSettings() {
+  settingsCache = await loadSettings();
+}
+
+function ensureSettingsLoaded() {
+  if (!settingsReady) {
+    settingsReady = refreshSettings();
+  }
+  return settingsReady;
+}
+
+function ensureStateLoaded() {
+  return Promise.all([ensureRulesLoaded(), ensureSettingsLoaded()]);
 }
 
 // Promise wrappers around the callback-style tab APIs.
@@ -98,6 +122,33 @@ function updateGroup(groupId, props) {
   });
 }
 
+function ungroupTab(tabId) {
+  return new Promise((resolve) => {
+    chrome.tabs.ungroup(tabId, () => {
+      if (chrome.runtime.lastError) {
+        logError("tabs.ungroup", chrome.runtime.lastError);
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    });
+  });
+}
+
+// index -1 places the tab last in its window.
+function moveTabToEnd(tabId) {
+  return new Promise((resolve) => {
+    chrome.tabs.move(tabId, { index: -1 }, () => {
+      if (chrome.runtime.lastError) {
+        logError("tabs.move", chrome.runtime.lastError);
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    });
+  });
+}
+
 // Find an existing group in the given window whose title matches groupName.
 async function findGroupInWindow(windowId, groupName) {
   const groups = await queryGroups({ windowId });
@@ -131,29 +182,77 @@ async function assignTabToGroup(tab, rule) {
   }
 }
 
-// Evaluate a single tab against the rules and group it if matched.
-// Returns true if a matching rule was found and grouping was attempted.
-async function processTab(tabOrId) {
-  await ensureRulesLoaded();
-  let tab = tabOrId;
-  if (typeof tabOrId === "number") {
-    tab = await getTab(tabOrId);
-  }
-  if (!tab || !tab.url) return false;
+// Take a tab out of one of our rule-based groups and put it last in its window.
+// Only groups whose title matches a rule are touched, so ungrouped tabs and
+// groups the user made by hand are left alone. Returns true if the tab was moved.
+async function evictFromManagedGroup(tab, url) {
+  if (!settingsCache.moveUnmatchedToEnd) return false;
+  // about:blank, the new-tab page and other non-web pages say nothing about
+  // where a tab belongs.
+  if (!getHostname(url)) return false;
+  if (tab.groupId === undefined || tab.groupId === -1) return false;
 
-  const rule = findRuleForUrl(tab.url, rulesCache);
-  if (!rule) {
-    log("no rule for", tab.url, "(", rulesCache.length, "rules loaded )");
-    return false;
-  }
-  log("matched", tab.url, "->", rule.groupName);
-  try {
-    await assignTabToGroup(tab, rule);
-    return true;
-  } catch (err) {
-    logError("assignTabToGroup failed for " + tab.url, err);
-    return false;
-  }
+  const groups = await queryGroups({ windowId: tab.windowId });
+  const group = groups.find((g) => g.id === tab.groupId);
+  if (!group || !rulesCache.some((r) => r.groupName === group.title)) return false;
+
+  log("evicting", url, "from", group.title);
+  if (!(await ungroupTab(tab.id))) return false;
+  return moveTabToEnd(tab.id);
+}
+
+// Tab events arrive in bursts (created, URL change, load complete). Run the work
+// for one tab strictly in order so an older decision can't land after a newer one.
+const tabQueues = new Map();
+
+function runForTab(tabId, task) {
+  const previous = tabQueues.get(tabId) || Promise.resolve();
+  const result = previous.then(task);
+  const tail = result
+    .catch(() => {})
+    .then(() => {
+      if (tabQueues.get(tabId) === tail) tabQueues.delete(tabId);
+    });
+  tabQueues.set(tabId, tail);
+  return result;
+}
+
+// Evaluate a single tab against the rules and group it if matched.
+// With `evict`, a tab that matches no rule is also taken out of its rule-based
+// group and moved to the end of the window (see evictFromManagedGroup).
+// Returns true if a matching rule was found and grouping was attempted.
+async function processTab(tabOrId, { evict = false } = {}) {
+  const tabId = typeof tabOrId === "number" ? tabOrId : tabOrId && tabOrId.id;
+  if (tabId === undefined) return false;
+
+  return runForTab(tabId, async () => {
+    await ensureStateLoaded();
+    // Re-read the tab: the event payload can be stale by the time this runs.
+    const tab = await getTab(tabId);
+    const url = tab && (tab.url || tab.pendingUrl);
+    if (!url) return false;
+
+    const rule = findRuleForUrl(url, rulesCache);
+    if (!rule) {
+      log("no rule for", url, "(", rulesCache.length, "rules loaded )");
+      if (evict) {
+        try {
+          await evictFromManagedGroup(tab, url);
+        } catch (err) {
+          logError("evictFromManagedGroup failed for " + url, err);
+        }
+      }
+      return false;
+    }
+    log("matched", url, "->", rule.groupName);
+    try {
+      await assignTabToGroup(tab, rule);
+      return true;
+    } catch (err) {
+      logError("assignTabToGroup failed for " + url, err);
+      return false;
+    }
+  });
 }
 
 // Re-scan every open tab and group matches (used after rule changes).
@@ -172,33 +271,42 @@ async function regroupAllTabs() {
 // --- Event listeners (registered at top level so they survive worker restarts) ---
 
 chrome.runtime.onInstalled.addListener(() => {
-  ensureRulesLoaded();
+  ensureStateLoaded();
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  ensureRulesLoaded();
+  ensureStateLoaded();
 });
 
-// New tab (covers links that open a new tab).
+// New tab (covers links that open a new tab). A link tab usually has no committed
+// URL yet, only a pendingUrl. A tab with an opener (e.g. a link opened from a
+// grouped tab) that doesn't belong to the group it landed in is sent to the end.
 chrome.tabs.onCreated.addListener((tab) => {
-  // The URL may not be ready yet; onUpdated will catch it. Try anyway.
-  if (tab.url) {
-    processTab(tab);
+  if (tab.url || tab.pendingUrl) {
+    processTab(tab.id, { evict: tab.openerTabId !== undefined });
   }
 });
 
-// Tab navigation / load. Act once the URL is known.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url || changeInfo.status === "complete") {
-    processTab(tab);
+// Tab navigation / load. A URL change re-checks group membership and may send the
+// tab to the end; a plain load or reload only groups matches and never moves tabs.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url) {
+    processTab(tabId, { evict: true });
+  } else if (changeInfo.status === "complete") {
+    processTab(tabId);
   }
 });
 
-// Keep the rules cache fresh.
+// Keep the rules and settings caches fresh.
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes[self.TabOrganizer.STORAGE_KEY]) {
+  if (area !== "sync") return;
+  if (changes[self.TabOrganizer.STORAGE_KEY]) {
     rulesCache = changes[self.TabOrganizer.STORAGE_KEY].newValue || [];
     rulesReady = Promise.resolve();
+  }
+  if (changes[SETTINGS_KEY]) {
+    settingsCache = normalizeSettings(changes[SETTINGS_KEY].newValue);
+    settingsReady = Promise.resolve();
   }
 });
 
@@ -223,5 +331,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Initial load.
-ensureRulesLoaded();
+ensureStateLoaded();
 })();

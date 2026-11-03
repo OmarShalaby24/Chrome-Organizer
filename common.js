@@ -16,6 +16,13 @@ const GROUP_COLORS = [
 
 const STORAGE_KEY = "rules";
 
+const SETTINGS_KEY = "settings";
+const DEFAULT_SETTINGS = {
+  // Take a tab out of its group and move it to the end when it opens a link
+  // or navigates to a URL that doesn't belong to the group.
+  moveUnmatchedToEnd: true,
+};
+
 // Generate a reasonably unique id for a rule.
 function generateRuleId() {
   return "r_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
@@ -97,11 +104,37 @@ function saveRules(rules) {
   });
 }
 
+// Merge stored settings over the defaults, ignoring anything that isn't an object.
+function normalizeSettings(stored) {
+  return {
+    ...DEFAULT_SETTINGS,
+    ...(stored && typeof stored === "object" ? stored : {}),
+  };
+}
+
+// Load settings from sync storage, filling in defaults (returns a Promise<object>).
+function loadSettings() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get(SETTINGS_KEY, (data) => {
+      resolve(normalizeSettings(data && data[SETTINGS_KEY]));
+    });
+  });
+}
+
+// Save settings to sync storage (returns a Promise).
+function saveSettings(settings) {
+  return new Promise((resolve) => {
+    chrome.storage.sync.set({ [SETTINGS_KEY]: settings }, () => resolve());
+  });
+}
+
 // Make helpers available when loaded as a module-less script in the popup.
 if (typeof self !== "undefined") {
   self.TabOrganizer = {
     GROUP_COLORS,
     STORAGE_KEY,
+    SETTINGS_KEY,
+    DEFAULT_SETTINGS,
     generateRuleId,
     normalizeDomain,
     parseDomains,
@@ -110,5 +143,8 @@ if (typeof self !== "undefined") {
     findRuleForUrl,
     loadRules,
     saveRules,
+    normalizeSettings,
+    loadSettings,
+    saveSettings,
   };
 }

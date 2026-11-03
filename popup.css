@@ -50,6 +50,19 @@ label {
   color: #374151;
 }
 
+label.toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  cursor: pointer;
+}
+
+label.toggle input {
+  margin: 2px 0 0;
+  flex-shrink: 0;
+}
+
 input[type="text"],
 select,
 textarea {
